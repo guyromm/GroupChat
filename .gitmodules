@@ -1,0 +1,3 @@
+[submodule "noodles"]
+	path = noodles
+	url = github-noodles:/guyromm/NoodlesFramework.git

@@ -1,0 +1,77 @@
+<!doctype html>
+<html>
+<head>
+<style type='text/css'>
+     #log {
+     min-height:30%;
+     width:85%;
+     border:solid red 1px;
+}
+     #chatters {
+	 float:right;
+	 border:solid blue 1px;
+	 width:15%;
+	 min-height:30%;
+     }
+#input {
+    width:85%;
+}
+</style>
+<script type='text/javascript' src="/static/js/flashsocket.js"></script> 
+<script type='text/javascript' src='/static/js/jquery.js'></script> 
+<script type='text/javascript' src='/static/js/network.js'></script> 
+<script type='text/javascript' src='/static/js/underscore.js'></script> 
+<script type='text/javascript' src='/static/js/backbone.js'></script> 
+<script type='text/html' id='chat_view'>
+<div id='chatters'></div>
+<pre id='log'></pre>
+<input type='text' id='input' />
+<input type='button' id='send_btn' value='Send' />
+</script>
+<script type='text/javascript'>
+
+var wsurl = 'ws://'+location.host+'/ws';
+
+$(function() {
+
+wsocket = new WebSocket(wsurl);
+wsocket.onopen = function() {
+    wsocket_onopen();
+    setWebsocketConn(null,true);
+    console.log('opening bo channel %o',1);
+    window.bo_channel = new Channel(1);
+    window.bo_channel.onRecieve(function(response){
+	    console.log(response);
+});
+
+    var ChatApp = Backbone.View.extend({
+	    el:$('#app'),
+	    events:{'keypress #input':'sendMsg'
+		    ,'click #send_btn':'sendMsg'
+	    },
+	    template:_.template($('#chat_view').html()),
+	    render:function(focus) {
+		$(this.el).html(this.template());
+		if (focus) $(this.el).find('#input').focus();
+	    },
+	    sendMsg:function(ev) {
+		if (ev.keyCode==13)
+		    {
+			var msg = this.el.find('#input').val();
+			this.el.find('#input').val('')
+			//console.log('w00t %o',msg);
+			window.bo_channel.send({'op':'msg','content':msg});
+		    }
+	    }
+	});
+    window.ca = new ChatApp;
+    window.ca.render(true);
+}
+});
+
+</script>
+</head>
+<body>
+<div id='app'></div>
+</body>
+</html>
