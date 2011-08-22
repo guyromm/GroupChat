@@ -5,7 +5,7 @@
      #log {
      min-height:30%;
      width:85%;
-     border:solid red 1px;
+
 }
      #chatters {
 	 float:right;
@@ -13,6 +13,9 @@
 	 width:15%;
 	 min-height:30%;
      }
+#log .msg {
+    height:15px;
+}
 #input {
     width:85%;
 }
@@ -22,6 +25,9 @@
 <script type='text/javascript' src='/static/js/network.js'></script> 
 <script type='text/javascript' src='/static/js/underscore.js'></script> 
 <script type='text/javascript' src='/static/js/backbone.js'></script> 
+<script type='text/html' id='user_msg_tpl'>
+[<#=m.escape('stamp')#>] &lt;<b><#=m.escape('sender')#></b>&gt; <#=m.escape('content')#><br />
+</script>
 <script type='text/html' id='chat_view'>
 <div id='chatters'></div>
 <pre id='log'></pre>
@@ -42,16 +48,58 @@ wsocket.onopen = function() {
     window.bo_channel = new Channel(1);
     window.bo_channel.onRecieve(function(response){
 	    console.log(response);
+	    switch (response.op)
+		{
+		case 'msg':
+		    var m = new Message(response);
+		    window.ca.messages.add(m);
+		    window.ca.render(true);
+		    break;
+		default:
+		    throw "unknown op "+response.op;
+		    break;
+		}
 });
+
+    var Message = Backbone.Model.extend({
+	    name:'message'
+	    ,defaults:{
+		sender:null,
+		stamp:null,
+		content:null}
+	});
+    var MessageView = Backbone.View.extend({
+	    tagName:"div"
+	    ,model:Message
+	    ,className:"msg"
+	    ,template:_.template($('#user_msg_tpl').html())
+	    ,render:function() {
+		console.log('render msg %o -> %o',this.model,this.el);
+		return $(this.el).html(this.template({m:this.model}));
+	    }
+	});
+    var Messages = Backbone.Collection.extend({
+	    model:Message
+	});
+
+    var chatwindowmessages = new Messages(); //{"content":"hi there!","sender":"milez"});
 
     var ChatApp = Backbone.View.extend({
 	    el:$('#app'),
+	    messages:chatwindowmessages,
 	    events:{'keypress #input':'sendMsg'
 		    ,'click #send_btn':'sendMsg'
 	    },
 	    template:_.template($('#chat_view').html()),
+	    addMsg:function(m) {
+		var mv = new MessageView({model:m});
+		var rndr = mv.render();
+		this.$('#log').append(rndr);
+	    },
 	    render:function(focus) {
 		$(this.el).html(this.template());
+		console.log('my messages: %o',this.messages);
+		this.messages.each(this.addMsg)
 		if (focus) $(this.el).find('#input').focus();
 	    },
 	    sendMsg:function(ev) {
@@ -61,7 +109,10 @@ wsocket.onopen = function() {
 			this.el.find('#input').val('')
 			//console.log('w00t %o',msg);
 			window.bo_channel.send({'op':'msg','content':msg});
+			this.$('#input').focus();
+			ev.preventDefault();
 		    }
+
 	    }
 	});
     window.ca = new ChatApp;
