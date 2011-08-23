@@ -233,10 +233,13 @@ wsocket.onopen = function() {
 
 	    },
 	    joinednames:function() { 
-		var joinednames=[];
+		var joinednames=[]; var sel=null;
 		this.joined.each(function(el) {
-			joinednames.push(el.id);
+			if (window.ca.selected.get('id')!=el.id)
+			    joinednames.push(el.id);
 		    });
+		if (window.ca.selected)
+		    joinednames.push(window.ca.selected.get('id'));
 		return joinednames.join(',');
 	    },
 	    joinRoom:function(ev,rn,nosel) {
