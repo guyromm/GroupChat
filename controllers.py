@@ -26,6 +26,7 @@ def writelog(r,l):
 def getroom(name):
     global rooms
     objs = [r for r in rooms if r['id']==name]
+    if len(objs)!=1: raise Exception('length of objs with id=%s is %s'%(name,len(objs)))
     return objs[0]
 @render_to('index.html')
 def index(request,room=None):
