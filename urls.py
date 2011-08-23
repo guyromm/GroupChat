@@ -14,6 +14,8 @@ def get_map():
                  
                 ('/', 'controllers.index'),
                 ('/ws','controllers.ChatWebsocket'),
+                ('/room/','controllers.index'),
+                ('/room/{room}','controllers.index'),
 
                 #('/route/url', 'controllerName.actionName')     
             ])

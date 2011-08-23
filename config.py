@@ -39,4 +39,4 @@ MIDDLEWARES = [
                #'session.SessionMiddleware', 
                ]
 
-SERVER_LOGTYPE='default'
+SERVER_LOGTYPE='supress'

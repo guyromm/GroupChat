@@ -4,8 +4,8 @@
 <style type='text/css'>
      #log {
      min-height:30%;
-     width:85%;
-
+     width:70%;
+     float:right;
 }
      #chatters {
 	 float:right;
@@ -13,23 +13,35 @@
 	 width:15%;
 	 min-height:30%;
      }
+#rooms {
+    float:left;
+    width:15%;
+    min-height:30%;
+       
+}
 #log .msg {
     height:15px;
 }
 #input {
     width:85%;
 }
+.roomname { cursor:pointer; }
+.roomname.selected { background-color:#abc; }
 </style>
 <script type='text/javascript' src="/static/js/flashsocket.js"></script> 
 <script type='text/javascript' src='/static/js/jquery.js'></script> 
 <script type='text/javascript' src='/static/js/network.js'></script> 
 <script type='text/javascript' src='/static/js/underscore.js'></script> 
 <script type='text/javascript' src='/static/js/backbone.js'></script> 
+<script type='text/html' id='room_item_tpl'>
+    <input type='checkbox' class='presence' name='present[<#=m.escape('id')#>]' /> <span class='roomname'><#=m.escape('id')#></span><br />
+</script>
 <script type='text/html' id='user_msg_tpl'>
 [<#=m.escape('stamp')#>] &lt;<b><#=m.escape('sender')#></b>&gt; <#=m.escape('content')#><br />
 </script>
 <script type='text/html' id='chat_view'>
 <div id='chatters'></div>
+<div id='rooms'></div>
 <pre id='log'></pre>
 <input type='text' id='input' />
 <input type='button' id='send_btn' value='Send' />
@@ -47,19 +59,47 @@ wsocket.onopen = function() {
     console.log('opening bo channel %o',1);
     window.bo_channel = new Channel(1);
     window.bo_channel.onRecieve(function(response){
-	    console.log(response);
+	    console.log("recieved: %o",response);
 	    switch (response.op)
 		{
-		case 'msg':
-		    var m = new Message(response);
-		    window.ca.messages.add(m);
-		    window.ca.render(true);
+		case 'create':
+		    if (response.objtype=='message')
+			{
+			    console.log('adding message %o',response.obj);
+			    var m = new Message(response.obj);
+			    window.ca.messages[response.obj['room']].add(m);
+			    window.ca.render(true);
+			}
+		    else
+			throw "unknown objtype "+response.objtype;
+		    break;
+		case 'joinresult':
+		    if (response.status=='ok')
+			{
+			    window.ca.joinResult(response)
+			}
+		    else
+			throw "join went bad"; 
+		    break;
+		case 'leaveresult':
+		    if (response.status=='ok')
+			{
+			    window.ca.leaveResult(response);
+			}
+		    else
+			throw "leave went bad";
 		    break;
 		default:
 		    throw "unknown op "+response.op;
 		    break;
 		}
 });
+    Backbone.sync = function(method, model, options) {
+        console.log("sync: %o.%o(%o,%o)",JSON.stringify(model.toJSON()),method,options,model.name);
+	window.bo_channel.send({'op':method,'obj':model.toJSON(),'options':options,'objtype':model.name});
+    }
+
+
 
     var Message = Backbone.Model.extend({
 	    name:'message'
@@ -68,39 +108,197 @@ wsocket.onopen = function() {
 		stamp:null,
 		content:null}
 	});
+    var Room = Backbone.Model.extend({
+	    name:'room'
+	    ,defaults:{
+	    }
+	});
+    var JoinedRoom = Backbone.Model.extend({
+	    name:'joinedroom'
+	    ,defaults:{
+	    }
+	});
+    var RoomView = Backbone.View.extend({
+	    tagName:"div"
+	    ,model:Room
+	    ,className:"room"
+	    ,events:{
+		"click .presence":"roomCheck"
+	    }
+	    ,template:_.template($('#room_item_tpl').html())
+	    ,roomCheck:function(ev) {
+		var j = window.ca.joined.get(this.model.get('id'));
+		if (j)
+		    j.destroy();
+		else
+		    window.ca.joinRoom(null,this.model.get('id'),true);
+
+	    }
+	    ,render:function() {
+		return $(this.el).html(this.template({m:this.model}));
+	    }
+	});
+    var JoinedRoomView = Backbone.View.extend({
+	    tagName:"div"
+	    ,model:JoinedRoom
+	    ,classNAme:"joined"
+	    ,render:function() {
+		//console.log('setting checked=true in %o',this.$('input'));
+		this.$('input').attr('checked',true);
+		//console.log('selected = %o',window.ca.selected.get('id'));
+		if (window.ca.selected && window.ca.selected.get('id') == this.model.get('id'))
+		    {
+			//console.log('adding selected to %o',this.$('.roomname'));
+			this.$('.roomname').addClass('selected');
+		    }
+	    }
+	});
     var MessageView = Backbone.View.extend({
 	    tagName:"div"
 	    ,model:Message
 	    ,className:"msg"
 	    ,template:_.template($('#user_msg_tpl').html())
 	    ,render:function() {
-		console.log('render msg %o -> %o',this.model,this.el);
+		//console.log('render msg %o -> %o',this.model,this.el);
 		return $(this.el).html(this.template({m:this.model}));
 	    }
 	});
     var Messages = Backbone.Collection.extend({
 	    model:Message
 	});
-
-    var chatwindowmessages = new Messages(); //{"content":"hi there!","sender":"milez"});
-
+    var Rooms = Backbone.Collection.extend({
+	    model:Room
+	});
+    var JoinedRooms = Backbone.Collection.extend({
+	    model:JoinedRoom
+	});
+    //var chatwindowmessages = new Messages(); //{"content":"hi there!","sender":"milez"});
+    var chatrooms = new Rooms(${rooms|n});
+    var joinedrooms = new JoinedRooms();
     var ChatApp = Backbone.View.extend({
 	    el:$('#app'),
-	    messages:chatwindowmessages,
+	    messages:{}, //chatwindowmessages,
+	    selected:null,
+	    joined:joinedrooms,
+	    rooms:chatrooms,
+	    roomviews:{},
+	    joinedviews:{},
 	    events:{'keypress #input':'sendMsg'
 		    ,'click #send_btn':'sendMsg'
-	    },
+		    ,'click .roomname':'joinRoom'},
 	    template:_.template($('#chat_view').html()),
+	    leaveResult:function(r) {
+		console.log("in leaveResult %o. joined = %o",r,this.joined);
+		var dr = this.joined.get(r.roomname);
+		this.joined.remove(dr);
+		if (this.selected==dr)
+		    {
+			this.selected=null;
+			this.clearLog();
+		    }
+		this.render();
+		var navtgt = '/room/'+this.joinednames();
+		console.log('navigate(%o)',navtgt);
+		window.router.navigate(navtgt);
+
+	    },
+	    joinResult:function(r) {
+
+		var nr = this.joined.get(r['obj']['id'])
+		if (!nr)
+		    {
+			var nr = new JoinedRoom(r['obj']);
+			this.joined.add(nr);
+		    }
+		if (!this.nosel) 
+		    {
+			console.log("ASSIGNING SELECTED = %o",nr);
+			this.selected = nr;
+		    }
+		this.nosel=false;
+		window.ca.messages[nr.get('id')]=new Messages(r.content);
+		console.log("just set this.selected -> %o",nr);
+		var rv = window.ca.roomviews;
+		var jrel = rv[nr.get('id')].el;
+		//console.log("jrel: %o",jrel);
+		var jrv = new JoinedRoomView({model:nr,el:jrel});
+		window.ca.joinedviews[nr.get('id')] = jrv;
+		console.log('calling .change() on %o',nr.get('id'));
+		this.render(true);
+		//jrv.render();
+		var joinednames = this.joinednames();
+		var navtgt = '/room/'+joinednames; 
+		console.log('navigate(%o)',navtgt);
+		window.router.navigate(navtgt);
+
+	    },
+	    joinednames:function() { 
+		var joinednames=[];
+		this.joined.each(function(el) {
+			joinednames.push(el.id);
+		    });
+		return joinednames.join(',');
+	    },
+	    joinRoom:function(ev,rn,nosel) {
+		if (rn) var roomname = rn;
+		else if (ev) var roomname = $.trim($(ev.target).text());
+		this.nosel=nosel;
+		var room = this.rooms.get(roomname);
+		if (!room) throw "could not get room "+roomname;
+
+		var jr = new JoinedRoom({id:roomname});
+		jr.save();
+		console.log('looking for room id %o -> %o',roomname,room);
+
+	    },
 	    addMsg:function(m) {
 		var mv = new MessageView({model:m});
 		var rndr = mv.render();
+		console.log('appending message to #log');
 		this.$('#log').append(rndr);
 	    },
-	    render:function(focus) {
-		$(this.el).html(this.template());
-		console.log('my messages: %o',this.messages);
-		this.messages.each(this.addMsg)
-		if (focus) $(this.el).find('#input').focus();
+	    addRoom:function(r) {
+		var r = new RoomView({model:r});
+		window.ca.roomviews[r.model.id]=r;
+		//console.log("adding %o to roomviews: %o",r,window.ca.roomviews);
+		this.$('#rooms').append(r.render());
+	    },
+	    showJoined:function(r,cnt) {
+		//console.log("showJoined %o %o",r.get('id'),cnt);
+		window.ca.joinedviews[r.get('id')].render();
+	    },
+	    render:function(clearmessages) {
+		console.log("chatapp.render()");
+		if (!this.rendered)
+		    {
+			$(this.el).html(this.template());
+			this.rooms.each(this.addRoom);
+		    }
+		console.log("rendering %o joined",this.joined.length);
+		//console.log('removing selected from %o',this.$('#rooms .roomname'));
+		window.ca.$('#rooms .roomname').removeClass('selected');
+		//console.log('setting value checked=false in %o',window.ca.$('#rooms input'));
+		window.ca.$('#rooms input').val('checked',false);
+		this.joined.each(this.showJoined);
+		//console.log('my messages: %o',this.messages);
+		if (this.selected)
+		    {
+			if (clearmessages) this.clearLog();
+			console.log("displaying all messages belonging to %o",this.selected.get('id'));
+			this.messages[this.selected.get('id')].each(this.addMsg);
+		    }
+
+		if (!this.selected) 
+		    $(this.el).find('#input').attr('disabled',true);
+		else
+		    $(this.el).find('#input').attr('disabled',false);
+		$(this.el).find('#input').focus();
+		this.rendered=true;
+	    },
+	    clearLog:function() {
+		console.log('cleared #log which has %o els',this.$('#log *').length);
+		this.$('#log').empty();
+		console.log('now has %o',this.$('#log *').length);
 	    },
 	    sendMsg:function(ev) {
 		if (ev.keyCode==13)
@@ -108,15 +306,36 @@ wsocket.onopen = function() {
 			var msg = this.el.find('#input').val();
 			this.el.find('#input').val('')
 			//console.log('w00t %o',msg);
-			window.bo_channel.send({'op':'msg','content':msg});
+			var m = new Message({'room':this.selected.get('id'),'content':msg});
+			m.save();
+			//window.bo_channel.send({'op':'msg','room':this.selected.get('id'),'content':msg});
 			this.$('#input').focus();
 			ev.preventDefault();
 		    }
 
 	    }
 	});
+    var ChatNav = Backbone.Router.extend({
+	    routes:{
+		"room/:roomname":"room"
+	    },
+	    room:function(roomname) {
+		var roomnames = roomname.split(',');
+		_.forEach(roomnames,function(ep,p) {
+			if (ep)
+			    window.ca.joinRoom(null,ep);
+		    });
+
+	    }
+	
+	});
+
+
     window.ca = new ChatApp;
     window.ca.render(true);
+    window.router = new ChatNav();
+
+    Backbone.history.start({pushState: true})
 }
 });
 

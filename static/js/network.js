@@ -122,7 +122,7 @@ else {
 host = API_SERVER_HOST || host;
 
 var wsocket;
-console.log("working with wsocket %o",wsocket);
+//console.log("working with wsocket %o",wsocket);
 var ws_connect_opened = false; // WebSocket opened flag
 var ws_msg_stack = new Array(); // Stack for storing messages if WS connection isn't established
 
@@ -148,7 +148,7 @@ function setWebsocketConn(user_access_token,noconn){
     wsocket.onopen = wsocket_onopen;
 
 	wsocket.onmessage = function(obj){
-		console.log(obj.data);
+	    //console.log(obj.data);
 		response = eval('(' + obj.data + ')');
 		channel_id = response.chid;
 		if (channelObjs[channel_id]){
