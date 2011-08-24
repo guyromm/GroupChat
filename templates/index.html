@@ -1,38 +1,5 @@
-<!doctype html>
-<html>
-<head>
-<style type='text/css'>
-     #log {
-     min-height:30%;
-     width:70%;
-     float:right;
-}
-     #chatters {
-	 float:right;
-	 border:solid blue 1px;
-	 width:15%;
-	 min-height:30%;
-     }
-#rooms {
-    float:left;
-    width:15%;
-    min-height:30%;
-       
-}
-#log .msg {
-    height:15px;
-}
-#input {
-    width:85%;
-}
-.roomname { cursor:pointer; }
-.roomname.selected { background-color:#abc; }
-</style>
-<script type='text/javascript' src="/static/js/flashsocket.js"></script> 
-<script type='text/javascript' src='/static/js/jquery.js'></script> 
-<script type='text/javascript' src='/static/js/network.js'></script> 
-<script type='text/javascript' src='/static/js/underscore.js'></script> 
-<script type='text/javascript' src='/static/js/backbone.js'></script> 
+<%inherit file="/base.html" />
+<%def name="headers()">
 <script type='text/html' id='room_item_tpl'>
     <input type='checkbox' class='presence' name='present[<#=m.escape('id')#>]' /> <span class='roomname'><#=m.escape('id')#></span><br />
 </script>
@@ -40,6 +7,7 @@
 [<#=m.escape('stamp')#>] &lt;<b><#=m.escape('sender')#></b>&gt; <#=m.escape('content')#><br />
 </script>
 <script type='text/html' id='chat_view'>
+<a class='logout_lnk' href="#">log out <#=user#></a>
 <div id='chatters'></div>
 <div id='rooms'></div>
 <pre id='log'></pre>
@@ -47,7 +15,8 @@
 <input type='button' id='send_btn' value='Send' />
 </script>
 <script type='text/javascript'>
-
+var user = "${user|n}";
+var authck = "${authck|n}";
 var wsurl = 'ws://'+location.host+'/ws';
 
 $(function() {
@@ -58,6 +27,7 @@ wsocket.onopen = function() {
     setWebsocketConn(null,true);
     console.log('opening bo channel %o',1);
     window.bo_channel = new Channel(1);
+    window.bo_channel.send({'op':'auth','user':user,'authck':authck});
     window.bo_channel.onRecieve(function(response){
 	    console.log("recieved: %o",response);
 	    switch (response.op)
@@ -80,6 +50,9 @@ wsocket.onopen = function() {
 			}
 		    else
 			throw "join went bad"; 
+		    break;
+		case 'signoutresult':
+		    location.href="/";
 		    break;
 		case 'leaveresult':
 		    if (response.status=='ok')
@@ -185,8 +158,14 @@ wsocket.onopen = function() {
 	    joinedviews:{},
 	    events:{'keypress #input':'sendMsg'
 		    ,'click #send_btn':'sendMsg'
-		    ,'click .roomname':'joinRoom'},
+		    ,'click .roomname':'joinRoom'
+		    ,'click .logout_lnk':'logOut'
+	    },
 	    template:_.template($('#chat_view').html()),
+	    logOut:function(ev) {
+		ev.preventDefault();
+		window.bo_channel.send({'op':'logout'});
+	    },
 	    leaveResult:function(r) {
 		console.log("in leaveResult %o. joined = %o",r,this.joined);
 		var dr = this.joined.get(r.roomname);
@@ -343,8 +322,7 @@ wsocket.onopen = function() {
 });
 
 </script>
-</head>
-<body>
+</%def>
+<%def name="content()">
 <div id='app'></div>
-</body>
-</html>
+</%def>

@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+<head>
+<style type='text/css'>
+     #log {
+     min-height:30%;
+     width:70%;
+}
+     #chatters {
+	 float:right;
+	 border:solid blue 1px;
+	 width:15%;
+	 min-height:30%;
+     }
+#rooms {
+    float:right;
+    width:15%;
+    min-height:30%;
+       
+}
+#log .msg {
+    height:15px;
+}
+#input {
+    width:85%;
+}
+.roomname { cursor:pointer; }
+.roomname.selected { background-color:#abc; }
+</style>
+<script type='text/javascript' src="/static/js/flashsocket.js"></script> 
+<script type='text/javascript' src='/static/js/jquery.js'></script> 
+<script type='text/javascript' src='/static/js/network.js'></script> 
+<script type='text/javascript' src='/static/js/underscore.js'></script> 
+<script type='text/javascript' src='/static/js/backbone.js'></script> 
+${next.headers()}
+</head>
+<body>
+${next.content()}
+</body>
+</html>

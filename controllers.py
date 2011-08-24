@@ -4,12 +4,13 @@ filedesc: default controller file
 '''
 from noodles.http import Response
 from noodles.websocket import MultiChannelWS, WebSocketHandler
-from noodles.templates import render_to
-import logging,gevent,redis,json,sys,datetime,os
+from noodles.templates import render_to,render_to_string
+import logging,gevent,redis,json,sys,datetime,os,hashlib,random
 from noodles.redisconn import RedisConn
 
-rooms = json.loads(open('rooms.json','r').read())
-
+rooms = json.loads(open(os.path.join('conf','rooms.json'),'r').read())
+usersfn = os.path.join('conf','users.json')
+users = json.loads(open(usersfn,'r').read())
 roomfiles = {}
 def writelog(r,l):
     global roomfiles
@@ -23,18 +24,73 @@ def writelog(r,l):
     fp.flush()
     #fp.close()
 
-def getroom(name):
-    global rooms
-    objs = [r for r in rooms if r['id']==name]
-    if len(objs)!=1: raise Exception('length of objs with id=%s is %s'%(name,len(objs)))
-    return objs[0]
-@render_to('index.html')
+def saveusers():
+    fp = open(usersfn,'w')
+    fp.write(json.dumps(users))
+    fp.close()
+
+def getuser(name):
+    global users
+    return getroom(name,d=users,fatal=False)
+
+def getroom(name,d=rooms,fatal=True):
+    objs = [r for r in d if r['id']==name]
+    if fatal:
+        if len(objs)!=1: raise Exception('length of objs with id=%s is %s'%(name,len(objs)))
+        return objs[0]
+    else:
+        return objs
+
+
+
+#@auth
+#@render_to('index.html')
 def index(request,room=None):
-    global rooms
-    if room: openrooms = room.split(',')
-    else: openrooms = []
-    openrooms = [getroom(rn) for rn in openrooms]
-    return {'rooms':json.dumps(rooms),'openrooms':json.dumps(openrooms)}
+    authck = request.cookies.get('auth')
+    logging.info('current auth cookie is %s (%s)'%(authck,RedisConn.get('auth.%s'%authck)))
+    setauthck=None
+    if not authck or not RedisConn.get('auth.%s'%authck):
+        un = request.params.get('username','')
+        pw = request.params.get('password','')
+        err=''
+        if un:
+            u = getuser(un)
+            if u:
+                logging.info('user exists')
+                u = u[0]
+                hpw = hashlib.md5(pw).hexdigest()
+                #raise Exception('comparing %s with %s'%(u,hpw))
+                if u['password']==hpw:
+                    logging.info('generating auth cookie')
+                    setauthck = ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for i in xrange(16))
+                else:
+                    err='invalid login'
+            else:
+                logging.info('creating new user')
+                user={'username':un,'password':hashlib.md5(pw).hexdigest()}
+                users.append(user)
+                saveusers()
+                err='user %s created succesfully. please log in'%un
+        context = {'username':un,'password':pw,'err':err}
+        rtpl='auth.html'
+    else:
+        
+        rtpl='index.html'
+        global rooms
+        if room: openrooms = room.split(',')
+        else: openrooms = []
+        openrooms = [getroom(rn) for rn in openrooms]
+        context = {'rooms':json.dumps(rooms),'openrooms':json.dumps(openrooms),'user':RedisConn.get('auth.%s'%authck),'authck':authck}
+
+    rendered_page = render_to_string(rtpl, context, request)
+    rsp= Response(rendered_page)
+    if setauthck: 
+        rsp.set_cookie('auth',setauthck)
+        RedisConn.set('auth.%s'%setauthck,un)
+        logging.info('setting auth cookie = %s'%(setauthck))
+        rsp.headers['Location']='/'
+    return rsp
+
 channelpref = 'chatme_'
 
 def dispatcher_routine(chan):
@@ -60,6 +116,9 @@ def nowstamp():
 class ChatChannel(WebSocketHandler):
     dispatcher=None
     myrooms=[]
+    authenticated=False
+    authck = None
+    user=None
     def onopen(self):
         self.resub()
     def resub(self,unsub=False):
@@ -74,7 +133,21 @@ class ChatChannel(WebSocketHandler):
         m = msg.data
         logging.info('ONMESSAGE < %s ; %s'%(msg.data,m['op']))
         
-        if m['op']=='msg':
+        if m['op'] in 'auth':
+            rauth = RedisConn.get('auth.%s'%m['authck'])
+            if rauth == m['user']:
+                self.authenticated=True
+                self.user = m['user']
+                self.authck = m['authck']
+        if not self.authenticated:
+            raise Exception('not authenticated')
+
+        if m['op'] in 'auth': pass
+        elif m['op'] in 'logout':
+            RedisConn.delete('auth.%s'%self.authck)
+            logging.info('signing out %s/%s'%(self.user,self.authck))
+            self.send({'op':'signoutresult','status':'ok'})
+        elif m['op']=='msg':
             pass
         elif m['op']=='join':
             pass
@@ -88,7 +161,7 @@ class ChatChannel(WebSocketHandler):
                 self.resub()
                 self.send({'op':'joinresult','status':'ok','roomname':roomname,'obj':o,'content':self.roomcontent(roomname)})
             elif m['objtype']=='message':
-                o['sender'] = self.request.remote_addr
+                o['sender'] = self.user #self.request.remote_addr
                 o['stamp'] = nowstamp()
                 line = json.dumps(o)
                 writelog(o['room'],line)

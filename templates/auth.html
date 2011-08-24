@@ -1,0 +1,13 @@
+<%inherit file="/base.html" />
+<%def name="headers()">
+</%def>
+<%def name="content()">
+<form method='post'>
+% if err:
+<div class='err'>${err}</div>
+% endif
+username: <input type='text' name='username' value="${username}"/><br />
+password: <input type='password' name='password' value="${password}"/><br />
+<input type='submit' value='Signup/Login' />
+</form>
+</%def>
