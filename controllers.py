@@ -2,7 +2,7 @@
 '''
 filedesc: default controller file
 '''
-from noodles.http import Response
+from noodles.http import Response,Redirect
 from noodles.websocket import MultiChannelWS, WebSocketHandler
 from noodles.templates import render_to,render_to_string
 import logging,gevent,redis,json,sys,datetime,os,hashlib,random
@@ -12,6 +12,9 @@ rooms = json.loads(open(os.path.join('conf','rooms.json'),'r').read())
 usersfn = os.path.join('conf','users.json')
 users = json.loads(open(usersfn,'r').read())
 roomfiles = {}
+
+ROWLIMIT = 10
+
 def writelog(r,l):
     global roomfiles
     fn = os.path.join('logs',r+'.log')
@@ -34,7 +37,11 @@ def getuser(name):
     return getroom(name,d=users,fatal=False)
 
 def getroom(name,d=rooms,fatal=True):
-    objs = [r for r in d if r['id']==name]
+    try:
+        objs = [r for r in d if r['id']==name]
+    except KeyError:
+        logging.info('error searching in %s'%d)
+        raise
     if fatal:
         if len(objs)!=1: raise Exception('length of objs with id=%s is %s'%(name,len(objs)))
         return objs[0]
@@ -67,7 +74,7 @@ def index(request,room=None):
                     err='invalid login'
             else:
                 logging.info('creating new user')
-                user={'username':un,'password':hashlib.md5(pw).hexdigest()}
+                user={'id':un,'password':hashlib.md5(pw).hexdigest()}
                 users.append(user)
                 saveusers()
                 err='user %s created succesfully. please log in'%un
@@ -79,16 +86,16 @@ def index(request,room=None):
         global rooms
         if room: openrooms = room.split(',')
         else: openrooms = []
-        openrooms = [getroom(rn) for rn in openrooms]
-        context = {'rooms':json.dumps(rooms),'openrooms':json.dumps(openrooms),'user':RedisConn.get('auth.%s'%authck),'authck':authck}
+        openrooms = [getroom(rn) for rn in openrooms if rn[0]!='@']
+        context = {'rooms':json.dumps(rooms),'openrooms':json.dumps(openrooms),'user':RedisConn.get('auth.%s'%authck),'authck':authck,'rowlimit':ROWLIMIT}
 
     rendered_page = render_to_string(rtpl, context, request)
     rsp= Response(rendered_page)
     if setauthck: 
-        rsp.set_cookie('auth',setauthck)
         RedisConn.set('auth.%s'%setauthck,un)
-        logging.info('setting auth cookie = %s'%(setauthck))
-        rsp.headers['Location']='/'
+        logging.info('setting auth cookie = %s (redis value = %s)'%(setauthck,RedisConn.get('auth.%s'%setauthck)))
+        rsp =  Redirect('/')
+        rsp.set_cookie('auth',setauthck)
     return rsp
 
 channelpref = 'chatme_'
@@ -97,14 +104,25 @@ def dispatcher_routine(chan):
     " This listens dispatcher redis channel and send data through operator channel "
     rc = redis.Redis()
     sub = rc.pubsub()
-    channels = set([channelpref+rm['id'] for rm in chan.myrooms])
+    myrooms = RedisConn.smembers('rooms.%s'%chan.user)
+    channels = []
+    for rm in myrooms:
+        logging.info('rm = %s, type=%s ; decoded: %s'%(rm,type(rm),json.loads(rm)))
+        nch = channelpref+json.loads(rm)['id']
+        channels.append(nch)
+    if chan.user:
+        channels.append(channelpref+'@'+chan.user)
+    #channels = set([channelpref+rm['id'] for rm in myrooms])
     #substr = ' '.join(channels)
     if len(channels):
+        for ochan in channels:
+            RedisConn.publish(ochan,json.dumps({'op':'subscribe','user':chan.user,'room':ochan.split('_')[1],'stamp':nowstamp()}))
+
         logging.info('subscribing to chat at %s'%channels)
         sub.subscribe(channels)
         for msg in sub.listen():
             if msg['type']=='subscribe': 
-                logging.info('SKIPING SUBSCRIBE MESSAGE %s'%msg)
+                logging.info('SKIPPING SUBSCRIBE MESSAGE %s'%msg)
                 continue
             logging.info('CHANNEL %s < DISPATCHER MESSAGE %s'%(chan,msg))
             msgd = msg['data']
@@ -112,10 +130,9 @@ def dispatcher_routine(chan):
     else:
         logging.info('no channels to subscribe to')
 def nowstamp():
-    return datetime.datetime.now().strftime('%Y-%m-%d %H:%m')
+    return datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
 class ChatChannel(WebSocketHandler):
     dispatcher=None
-    myrooms=[]
     authenticated=False
     authck = None
     user=None
@@ -126,7 +143,15 @@ class ChatChannel(WebSocketHandler):
             logging.info('tearing down message dispatcher')
             gevent.kill(self.dispatcher)
             self.dispatcher=None
-        if not unsub:
+        if unsub:
+            logging.info('looks like we\'re leaving. unsubscribing from channels:')
+            while len(RedisConn.smembers('rooms.%s'%self.user)):
+                room = json.loads(RedisConn.spop('rooms.%s'%self.user))['id']
+                logging.info('unsub: %s'%room)
+                ochan = channelpref + room
+                RedisConn.srem('users.%s'%room,self.user)
+                RedisConn.publish(ochan,json.dumps({'op':'unsubscribe','user':self.user,'room':room,'stamp':nowstamp()}))
+        else:
             logging.info('creating new dispatcher')
             self.dispatcher = gevent.spawn(dispatcher_routine, self)
     def onmessage(self, msg):
@@ -156,10 +181,20 @@ class ChatChannel(WebSocketHandler):
             if m['objtype']=='joinedroom':
                 roomname = o['id']
                 r =  getroom(roomname) ; assert r
-                if roomname not in self.myrooms:
-                    self.myrooms.append(o)
+                roomkey='rooms.%s'%self.user
+                myrooms = RedisConn.smembers(roomkey)
+                if roomname not in [json.loads(mr)['id'] for mr in myrooms]:
+                    logging.info('%s not in myrooms %s, hence adding'%(roomname,myrooms))
+                    RedisConn.sadd(roomkey,json.dumps(o))
+                    myrooms = RedisConn.smembers(roomkey)
+                    lo = {'op':'join','room':roomname,'user':self.user,'stamp':nowstamp(),'obj':o}
+                    writelog(roomname,json.dumps(lo))
+
+                RedisConn.sadd('users.%s'%roomname,self.user)
+
+
                 self.resub()
-                self.send({'op':'joinresult','status':'ok','roomname':roomname,'obj':o,'content':self.roomcontent(roomname)})
+                self.send({'op':'joinresult','status':'ok','roomname':roomname,'obj':o,'content':self.roomcontent(roomname),'users':list(RedisConn.smembers('users.%s'%roomname))})
             elif m['objtype']=='message':
                 o['sender'] = self.user #self.request.remote_addr
                 o['stamp'] = nowstamp()
@@ -175,12 +210,23 @@ class ChatChannel(WebSocketHandler):
             if m['objtype']=='joinedroom':
                 roomname = m['obj']['id']
                 r = getroom(roomname) ; assert r
-                if roomname in self.myrooms:
-                    self.myrooms.remove(roomname)
+                roomkey = 'rooms.%s'%self.user
+                myrooms = RedisConn.smembers(roomkey)
+                if roomname in [json.loads(mr)['id'] for mr in myrooms]:
+                    RedisConn.srem(roomkey,json.dumps({'id':roomname}))
+                    lo = {'op':'leave','room':roomname,'user':self.user,'stamp':nowstamp(),'obj':m['obj']}
+                    writelog(roomname,json.dumps(lo))
+                    logging.info('DEPARTTURE of %s from %s -> %s'%(self.user,roomname,RedisConn.smembers(roomkey)))
+                    
+                RedisConn.srem('users.%s'%roomname,self.user)
                 self.resub()
+
                 self.send({'op':'leaveresult','status':'ok','roomname':roomname})
             else:
                 raise Exception('unknown objtype %s'%m['objtype'])
+        elif m['op']=='leaveall':
+            while len(RedisConn.smembers('rooms.%s'%self.user)): RedisConn.spop('rooms.%s'%self.user)
+            self.resub()
         else:
             raise Exception('unknown op %s'%m['op'])
         #self.send(msg.data)
@@ -207,6 +253,7 @@ class ChatChannel(WebSocketHandler):
             if not rl: break
             jl = json.loads(rl)
             rt.append(jl)
+            if len(rt)>ROWLIMIT: rt.pop(0)
         return rt #[{"content":"hi there, welcome to %s!"%roomname,"sender":"server","stamp":nowstamp()}]
     def onclose(self):
         logging.info('ChatChannel.ONCLOSE')

@@ -8,7 +8,6 @@
 }
      #chatters {
 	 float:right;
-	 border:solid blue 1px;
 	 width:15%;
 	 min-height:30%;
      }
@@ -24,8 +23,10 @@
 #input {
     width:85%;
 }
-.roomname { cursor:pointer; }
+.roomname,.user { cursor:pointer; }
 .roomname.selected { background-color:#abc; }
+.roomname.unread { font-weight:bold; }
+.msg .selected { color:#abc; }
 </style>
 <script type='text/javascript' src="/static/js/flashsocket.js"></script> 
 <script type='text/javascript' src='/static/js/jquery.js'></script> 

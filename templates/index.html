@@ -4,18 +4,27 @@
     <input type='checkbox' class='presence' name='present[<#=m.escape('id')#>]' /> <span class='roomname'><#=m.escape('id')#></span><br />
 </script>
 <script type='text/html' id='user_msg_tpl'>
-[<#=m.escape('stamp')#>] &lt;<b><#=m.escape('sender')#></b>&gt; <#=m.escape('content')#><br />
+[<#=m.escape('stamp')#>] <# 
+      if (m.get('op')=='join' || m.get('op')=='subscribe') { #>***<b><#=m.escape('user')#></b> has joined <#=m.escape('room')#><br />      <# } 
+  else if (m.get('op')=='leave' || m.get('op')=='unsubscribe') { #>***<b><#=m.escape('user')#></b> has left <#=m.escape('room')#><br />      <# }
+  else { #> &lt;<b <#=(user==m.get('sender')?'class="selected"':'')#>><#=m.escape('sender')#></b>&gt; <#=m.escape('content')#><br /><# } 
+#>
+
+</script>
+<script type='text/html' id='user_tpl'>
+      <#=(user==m.id?'<b>':'')#><#=m.escape('id')#><#=(user==m.id?'</b>':'')#>
 </script>
 <script type='text/html' id='chat_view'>
 <a class='logout_lnk' href="#">log out <#=user#></a>
-<div id='chatters'></div>
 <div id='rooms'></div>
+<div id='chatters'></div>
 <pre id='log'></pre>
 <input type='text' id='input' />
 <input type='button' id='send_btn' value='Send' />
 </script>
 <script type='text/javascript'>
 var user = "${user|n}";
+var rowlimit = ${rowlimit};
 var authck = "${authck|n}";
 var wsurl = 'ws://'+location.host+'/ws';
 
@@ -35,13 +44,16 @@ wsocket.onopen = function() {
 		case 'create':
 		    if (response.objtype=='message')
 			{
-			    console.log('adding message %o',response.obj);
-			    var m = new Message(response.obj);
-			    window.ca.messages[response.obj['room']].add(m);
-			    window.ca.render(true);
+			    window.ca.incomingMessage(response);
 			}
 		    else
 			throw "unknown objtype "+response.objtype;
+		    break;
+		case 'unsubscribe':
+		    window.ca.handleUnsubscribe(response);
+		    break;
+		case 'subscribe':
+		    window.ca.handleSubscribe(response);
 		    break;
 		case 'joinresult':
 		    if (response.status=='ok')
@@ -97,6 +109,27 @@ wsocket.onopen = function() {
 	    ,className:"room"
 	    ,events:{
 		"click .presence":"roomCheck"
+		,'click .roomname':'joinRoom'
+	    }
+	    ,joinRoom:function(ev,nosel) {
+		var roomname = this.model.get('id');
+		this.nosel=nosel;
+		var room = this.model;
+		if (!room) throw "could not get room "+roomname;
+
+		console.log('looking for room id %o -> %o',roomname,room);
+		var jr = window.ca.joined.get(roomname);
+		if (jr)
+		    {
+			window.ca.switchRoom(roomname);
+		    }
+		else
+		    {
+			var jr = new JoinedRoom({id:roomname});
+			jr.save();
+
+		    }
+
 	    }
 	    ,template:_.template($('#room_item_tpl').html())
 	    ,roomCheck:function(ev) {
@@ -104,7 +137,7 @@ wsocket.onopen = function() {
 		if (j)
 		    j.destroy();
 		else
-		    window.ca.joinRoom(null,this.model.get('id'),true);
+		    window.ca.joinRoom(this.model.get('id'),true);
 
 	    }
 	    ,render:function() {
@@ -114,15 +147,29 @@ wsocket.onopen = function() {
     var JoinedRoomView = Backbone.View.extend({
 	    tagName:"div"
 	    ,model:JoinedRoom
+	    ,unread:0
 	    ,classNAme:"joined"
+	    ,incrUnread:function() {
+		
+		if (this.model.get('id')!=window.ca.selected.get('id'))
+		    this.unread+=1;
+	    }
 	    ,render:function() {
 		//console.log('setting checked=true in %o',this.$('input'));
 		this.$('input').attr('checked',true);
 		//console.log('selected = %o',window.ca.selected.get('id'));
+
+		if (this.unread) var str = this.model.id+' ('+this.unread+')';
+		else var str = this.model.id;
+		//console.log('str = %o',str);
+		this.$('.roomname').text(str);
+		if (this.unread) this.$('.roomname').addClass('unread');
+		else this.$('.roomname').removeClass('unread');
 		if (window.ca.selected && window.ca.selected.get('id') == this.model.get('id'))
 		    {
 			//console.log('adding selected to %o',this.$('.roomname'));
-			this.$('.roomname').addClass('selected');
+			this.$('.roomname').addClass('selected')
+
 		    }
 	    }
 	});
@@ -135,6 +182,32 @@ wsocket.onopen = function() {
 		//console.log('render msg %o -> %o',this.model,this.el);
 		return $(this.el).html(this.template({m:this.model}));
 	    }
+	});
+    var User = Backbone.Model.extend({
+	    defaults:{
+		name:null
+		,room:null
+	    }
+	});
+    var UserView = Backbone.View.extend({
+	    tagName:"div"
+	    ,model:User
+	    ,className:"user"
+	    ,template:_.template($('#user_tpl').html())
+	    ,events:{
+		'click':'openDialog'
+	    }
+	    ,openDialog:function() {
+		//we want to create a joinedroom which is really a privuser
+		var rname = this.model.get('id');
+		window.ca.openDialog(rname);
+	    }
+	    ,render:function() {
+		return $(this.el).html(this.template({m:this.model}));
+	    }
+	});
+    var Users = Backbone.Collection.extend({
+	    model:User
 	});
     var Messages = Backbone.Collection.extend({
 	    model:Message
@@ -156,15 +229,84 @@ wsocket.onopen = function() {
 	    rooms:chatrooms,
 	    roomviews:{},
 	    joinedviews:{},
+	    users:{},
+	    unread:{},
 	    events:{'keypress #input':'sendMsg'
 		    ,'click #send_btn':'sendMsg'
-		    ,'click .roomname':'joinRoom'
+		    /*,'click .roomname':'joinRoom'*/
 		    ,'click .logout_lnk':'logOut'
 	    },
 	    template:_.template($('#chat_view').html()),
 	    logOut:function(ev) {
 		ev.preventDefault();
 		window.bo_channel.send({'op':'logout'});
+	    },
+	    initjoin:false,
+	    handleUnsubscribe:function(r) {
+		var u = this.users[r.room].get(r.user);
+		if (u) this.users[r.room].remove(u);
+		console.log("after removing %o from %o we have %o users left",r.user,r.room,this.users[r.room].length);
+
+		var m = new Message(r);
+		window.ca.messages[r.room].add(m);
+
+		if (r['room']!=this.joined.id)
+		    {
+			this.joinedviews[r['room']].incrUnread()
+			console.log("incrementing %o.unread -> %o",r['room'],this.joinedviews[r['room']].unread);
+			this.render();
+		    }
+		else
+		    if (this.selected && this.selected.get('id')==r.room)
+			this.render();
+	    },
+	    handleSubscribe:function(r) {
+		/* a user enters one of our rooms */
+		console.log('handling subscribe of %o @ %o (%o)',r.user,r.room,r);
+		var u = this.users[r.room].get(r.user);
+		if (!u)
+		    {
+			var u = new User({id:r.user,room:r.room});
+			this.users[r.room].add(u);
+		    }
+		var dorender=false;
+		if (r['room']!=this.joined.id)
+		    {
+			this.joinedviews[r['room']].incrUnread()
+			console.log("incrementing %o.unread -> %o",r['room'],this.joinedviews[r['room']].unread);
+			dorender=true;
+		    }
+
+		//if (!this.users[r.room]) this.users[r.room]=new Users();
+		//console.log(r); throw ('boo');
+		var m = new Message(r);
+		window.ca.messages[r.room].add(m);
+		
+		if (dorender || (this.selected && this.selected.get('id')==r.room))
+		    {
+			this.render(false);
+		    }
+	    },
+	    joinRoom:function(rn,nosel) {
+		if (!this.initjoin)
+		    {
+			window.bo_channel.send({'op':'leaveall'});
+			this.initjoin=true;
+		    }
+		if (rn[0]=='@')
+		    {
+			this.openDialog(rn);
+		    }
+		else
+		    {
+			return this.roomviews[rn].joinRoom(null,nosel);
+		    }
+	    },
+	    openDialog:function(rname) {
+		//var rname = '@'+rname;
+		var r = new Room({id:rname});
+		this.addRoom(r);
+		this.joinResult({'obj':{'id':rname},'users':[]});
 	    },
 	    leaveResult:function(r) {
 		console.log("in leaveResult %o. joined = %o",r,this.joined);
@@ -181,23 +323,66 @@ wsocket.onopen = function() {
 		window.router.navigate(navtgt);
 
 	    },
-	    joinResult:function(r) {
-
-		var nr = this.joined.get(r['obj']['id'])
-		if (!nr)
+	    incomingMessage:function(r) {
+		console.log('adding message %o to room %o (%o)',r.obj,r.obj['room'],window.ca.messages);
+		var m = new Message(r.obj);
+		if (r.obj.room[0]=='@')
 		    {
-			var nr = new JoinedRoom(r['obj']);
-			this.joined.add(nr);
+			var tgtroom = '@'+r.obj.sender;
 		    }
+		else
+		    var tgtroom = r.obj['room'];
+
+		window.ca.messages[tgtroom].add(m);
+		if (r.obj['room']!=this.joined.id)
+		    {
+			this.joinedviews[tgtroom].incrUnread()
+			console.log("incrementing %o.unread -> %o",tgtroom,this.joinedviews[tgtroom].unread);
+		    }
+		window.ca.render(true);
+	    },
+	    switchRoom:function(rn) {
+		this.selected = this.rooms.get(rn);
+		this.assignSelected(this.selected);
+		this.render();
+	    },
+	    assignSelected:function(nr) {
 		if (!this.nosel) 
 		    {
 			console.log("ASSIGNING SELECTED = %o",nr);
 			this.selected = nr;
+			if (this.joinedviews[nr.get('id')])
+			    this.joinedviews[nr.get('id')].unread=0;
+		    }
+
+	    },
+	    joinResult:function(r) {
+
+		var lbl =r['obj']['id'];
+		//if (r.obj.room) var lbl = r.obj.room;
+
+		var nr = this.joined.get(lbl);
+		//if (!r['obj']['id']) { console.log(r); throw "argh - cannot find joined room by robj";}
+		if (!nr)
+		    {
+			var nr = new JoinedRoom(r['obj']);
+			this.joined.add(nr);
+			//console.log("hi %o",nr); throw "hi";
+		    }
+		
+		this.assignSelected(nr);
+		var userscol = new Users();
+		window.ca.users[nr.get('id')] = userscol;
+		for (var i=0;i<r.users.length;i++)
+		    {
+			var tu = new User({id:r.users[i],room:nr.get('id')});
+			userscol.add(tu);
 		    }
 		this.nosel=false;
 		window.ca.messages[nr.get('id')]=new Messages(r.content);
 		console.log("just set this.selected -> %o",nr);
 		var rv = window.ca.roomviews;
+		
 		var jrel = rv[nr.get('id')].el;
 		//console.log("jrel: %o",jrel);
 		var jrv = new JoinedRoomView({model:nr,el:jrel});
@@ -221,18 +406,7 @@ wsocket.onopen = function() {
 		    joinednames.push(window.ca.selected.get('id'));
 		return joinednames.join(',');
 	    },
-	    joinRoom:function(ev,rn,nosel) {
-		if (rn) var roomname = rn;
-		else if (ev) var roomname = $.trim($(ev.target).text());
-		this.nosel=nosel;
-		var room = this.rooms.get(roomname);
-		if (!room) throw "could not get room "+roomname;
 
-		var jr = new JoinedRoom({id:roomname});
-		jr.save();
-		console.log('looking for room id %o -> %o',roomname,room);
-
-	    },
 	    addMsg:function(m) {
 		var mv = new MessageView({model:m});
 		var rndr = mv.render();
@@ -249,7 +423,11 @@ wsocket.onopen = function() {
 		//console.log("showJoined %o %o",r.get('id'),cnt);
 		window.ca.joinedviews[r.get('id')].render();
 	    },
-	    render:function(clearmessages) {
+	    addUser:function(u) {
+		//console.log('addUser(%o)',u);
+		this.$('#chatters').append(new UserView({model:u}).render());
+	    },
+	    render:function() {
 		console.log("chatapp.render()");
 		if (!this.rendered)
 		    {
@@ -265,10 +443,23 @@ wsocket.onopen = function() {
 		//console.log('my messages: %o',this.messages);
 		if (this.selected)
 		    {
-			if (clearmessages) this.clearLog();
+			//if (clearmessages) 
+			this.clearLog();
 			console.log("displaying all messages belonging to %o",this.selected.get('id'));
-			this.messages[this.selected.get('id')].each(this.addMsg);
+			var msgs = this.messages[this.selected.get('id')];
+			while (msgs.length>rowlimit)
+			    {
+				var tmod = msgs.at(0);
+				console.log('removing extra msg %o',tmod);
+				msgs.remove(tmod);
+			    }
+			msgs.each(this.addMsg);
+
+			this.$('#chatters').empty();
+			console.log(this.users[this.selected.get('id')]);
+			this.users[this.selected.get('id')].each(this.addUser);
 		    }
+
 
 		if (!this.selected) 
 		    $(this.el).find('#input').attr('disabled',true);
@@ -297,6 +488,7 @@ wsocket.onopen = function() {
 
 	    }
 	});
+    
     var ChatNav = Backbone.Router.extend({
 	    routes:{
 		"room/:roomname":"room"
@@ -304,10 +496,8 @@ wsocket.onopen = function() {
 	    room:function(roomname) {
 		var roomnames = roomname.split(',');
 		_.forEach(roomnames,function(ep,p) {
-			if (ep)
-			    window.ca.joinRoom(null,ep);
+			if (ep) window.ca.joinRoom(ep);
 		    });
-
 	    }
 	
 	});
