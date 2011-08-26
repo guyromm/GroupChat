@@ -7,7 +7,7 @@
 [<#=m.escape('stamp')#>] <# 
       if (m.get('op')=='join' || m.get('op')=='subscribe') { #>***<b><#=m.escape('user')#></b> has joined <#=m.escape('room')#><br />      <# } 
   else if (m.get('op')=='leave' || m.get('op')=='unsubscribe') { #>***<b><#=m.escape('user')#></b> has left <#=m.escape('room')#><br />      <# }
-  else { #> &lt;<b <#=(user==m.get('sender')?'class="selected"':'')#>><#=m.escape('sender')#></b>&gt; <#=m.escape('content')#><br /><# } 
+  else { #> &lt;<b <#=(user==m.get('sender')?'class="selected"':'')#>><#=m.escape('sender')#></b>&gt; <#=escapeHTMLwithLinks(m.get('content'))#><br /><# } 
 #>
 
 </script>
@@ -23,6 +23,23 @@
 <input type='button' id='send_btn' value='Send' />
 </script>
 <script type='text/javascript'>
+var rpl = /http\:\/\/([^ ]+)/g;
+  var escapeHTMLwithLinks = function(string) {
+      var m = string.match(rpl);
+      //console.log("matches: %o", m);
+      if (m)
+	  {
+	      for (var i=0;i<m.length;i++)
+		  string = string.replace(m[i],'MATCH'+i);
+	  }
+      var rt = string.replace(/&(?!\w+;|#\d+;|#x[\da-f]+;)/gi, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;').replace(/\//g,'&#x2F;');
+if (m) {
+      for (var i=0;i<m.length;i++)
+          rt = rt.replace('MATCH'+i,'<a href="'+m[i]+'">'+m[i]+'</a>');
+}
+      return rt;
+
+  };
 var user = "${user|n}";
 var rowlimit = ${rowlimit};
 var authck = "${authck|n}";
@@ -199,7 +216,7 @@ wsocket.onopen = function() {
 	    }
 	    ,openDialog:function() {
 		//we want to create a joinedroom which is really a privuser
-		var rname = this.model.get('id');
+		var rname = '@'+this.model.get('id');
 		window.ca.openDialog(rname);
 	    }
 	    ,render:function() {
@@ -328,7 +345,15 @@ wsocket.onopen = function() {
 		var m = new Message(r.obj);
 		if (r.obj.room[0]=='@')
 		    {
-			var tgtroom = '@'+r.obj.sender;
+			if (r.obj.sender==user) //if mmy own message in existing query
+			    var tgtroom = r.obj.room;
+			else
+			    var tgtroom = '@'+r.obj.sender;
+			if (!window.ca.messages[tgtroom]) 
+			    {
+				window.ca.openDialog(tgtroom);
+				//window.ca.messages[tgtroom] = new Messages();
+			    }
 		    }
 		else
 		    var tgtroom = r.obj['room'];
@@ -342,11 +367,19 @@ wsocket.onopen = function() {
 		window.ca.render(true);
 	    },
 	    switchRoom:function(rn) {
+		console.log("switching to room %o",rn);
+		if (rn[0]=='@' && !this.rooms.get(rn)) 
+		    {
+			this.rooms.add(new Room({id:rn}));
+			//throw "added room "+rn;
+		    }
 		this.selected = this.rooms.get(rn);
+		if (!this.selected) throw "could not switch";
 		this.assignSelected(this.selected);
 		this.render();
 	    },
 	    assignSelected:function(nr) {
+		if (!nr) throw "no nr passed";
 		if (!this.nosel) 
 		    {
 			console.log("ASSIGNING SELECTED = %o",nr);
@@ -410,7 +443,7 @@ wsocket.onopen = function() {
 	    addMsg:function(m) {
 		var mv = new MessageView({model:m});
 		var rndr = mv.render();
-		console.log('appending message to #log');
+		//console.log('appending message to #log');
 		this.$('#log').append(rndr);
 	    },
 	    addRoom:function(r) {

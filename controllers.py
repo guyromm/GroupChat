@@ -13,7 +13,7 @@ usersfn = os.path.join('conf','users.json')
 users = json.loads(open(usersfn,'r').read())
 roomfiles = {}
 
-ROWLIMIT = 10
+ROWLIMIT = 30
 
 def writelog(r,l):
     global roomfiles
@@ -204,6 +204,18 @@ class ChatChannel(WebSocketHandler):
                 assert o['room']
                 logging.info('PUBLISH(%s) > %s'%(pubchan,m))
                 RedisConn.publish(pubchan,json.dumps(m))
+                #publish a copy to self in case of privmsg
+                if o['room'][0]=='@':
+                    no = o.copy()
+                    # snd = no['sender']
+                    no['sender'] = no['room'][1:]
+                    # no['room']='@'+no['sender']
+                    nm = m.copy()
+                    nm['o']=no
+                    pchan = channelpref+'@'+self.user
+                    #Exception: {u'objtype': u'message', u'obj': {u'stamp': '2011-08-26 09:50', u'content': u'w00t', u'sender': u'milez', u'room': u'@milez2'}, u'options': {}, u'op': u'create'}
+                    logging.info('PUBLISHSELF %s < %s'%(pchan,json.dumps(nm)))
+                    RedisConn.publish(pchan,json.dumps(m))
             else:
                 raise Exception('unknown objtype %s'%m['objtype'])
         elif m['op'] in ['delete']:
