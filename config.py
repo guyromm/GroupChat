@@ -40,3 +40,5 @@ MIDDLEWARES = [
                ]
 
 SERVER_LOGTYPE='supress'
+
+from config_local import *
