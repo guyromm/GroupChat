@@ -151,6 +151,11 @@ class ChatChannel(WebSocketHandler):
                 ochan = channelpref + room
                 RedisConn.srem('users.%s'%room,self.user)
                 RedisConn.publish(ochan,json.dumps({'op':'unsubscribe','user':self.user,'room':room,'stamp':nowstamp()}))
+                logging.info('publishing unsub event on %s'%ochan)
+
+                lo = {'op':'leave','room':room,'user':self.user,'stamp':nowstamp()} #,'obj':m['obj']}
+                writelog(room,json.dumps(lo))
+
         else:
             logging.info('creating new dispatcher')
             self.dispatcher = gevent.spawn(dispatcher_routine, self)
