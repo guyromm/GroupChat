@@ -269,9 +269,7 @@ wsocket.onopen = function() {
 
 		if (r['room']!=this.joined.id)
 		    {
-			this.joinedviews[r['room']].incrUnread()
-			console.log("incrementing %o.unread -> %o",r['room'],this.joinedviews[r['room']].unread);
-			this.render();
+//not incrementing unread
 		    }
 		else
 		    if (this.selected && this.selected.get('id')==r.room)
@@ -289,9 +287,7 @@ wsocket.onopen = function() {
 		var dorender=false;
 		if (r['room']!=this.joined.id)
 		    {
-			this.joinedviews[r['room']].incrUnread()
-			console.log("incrementing %o.unread -> %o",r['room'],this.joinedviews[r['room']].unread);
-			dorender=true;
+//not incrementing unread
 		    }
 
 		//if (!this.users[r.room]) this.users[r.room]=new Users();
